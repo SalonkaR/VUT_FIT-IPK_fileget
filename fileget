@@ -1,0 +1,177 @@
+#!/usr/bin/env python3
+
+########################
+##   Matus Tvarozny   ##
+##      xtvaro00      ##
+##      3.3.2021      ##
+########################
+
+#imports
+import socket
+import getopt
+import sys
+import time
+import os
+
+#global 
+fileserver = ""
+fileserverhost = ""
+fileserverport = 0
+get_all_switch = False
+get_all_list = []
+
+def saver(path, data):
+    #looking for folders
+    if path.count("/") > 0:
+        folders = path[:path.rfind("/")]
+        os.makedirs(folders, exist_ok = True)
+    file = path
+    f = open(file, "wb")
+    f.write(data)
+
+
+def reader(path):
+    global get_all_switch
+    global get_all_list
+    
+    #using SOCK_STREAM to connect to fileserver
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    #if connection is refused
+    try:
+        s.connect((fileserverhost, fileserverport))
+        s.sendall(str.encode('GET '+path+' FSP/1.0\r\nHostname: '+fileserver+'\r\nAgent: xtvaro00\r\n\r\n'))
+        #s.settimeout(1.0)
+    except Exception:
+        sys.stderr.write("ERR: connection error\n") 
+        sys.exit(2)
+
+    data = b''
+
+    #reading all data recieved data 
+    while True:
+        #if connection is refused
+        try:
+            reading_data = s.recv(2048)
+            #s.settimeout(1.0)
+            if not reading_data:
+                break
+            data+=reading_data
+        except Exception:
+            sys.stderr.write("ERR: connection error\n") 
+            sys.exit(2)
+
+    #file not found
+    if b'Not Found' in data[:data.find(b'\r\n')]:
+        sys.stderr.write("ERR: file not found\n") 
+        sys.exit(2)
+
+    #bad request
+    if b'Bad Request' in data[:data.find(b'\r\n')]:
+        sys.stderr.write("ERR: bad request\n") 
+        sys.exit(2)
+
+    #server error
+    if b'Server Error' in data[:data.find(b'\r\n')]:
+        sys.stderr.write("ERR: server error\n") 
+        sys.exit(2)
+
+    #success yey!
+
+    #cutting off header
+    data = data[data.find(b'\r\n\r\n')+4:]
+
+    #saving index to list for getall()
+    if get_all_switch == True and path == "index":
+        data = data.decode()
+        get_all_list = data.split("\r\n")
+        get_all_list = get_all_list[:-1]
+    else:
+        saver(path, data)
+
+
+def getall():
+    global get_all_switch
+    global get_all_list
+
+    get_all_switch = True
+    reader("index")
+    lines = get_all_list
+    for line in lines:
+        reader(line)
+
+
+def main(argv):
+    #parsing entry agruments
+    try:
+        opts, args = getopt.getopt(argv,"n:f:")
+    except getopt.GetoptError:
+        sys.stderr.write("fileget.py -n <nameserver> -f <surl>")
+        sys.exit(2)
+
+    if len(opts) != 2:
+        sys.stderr.write("fileget.py -n <nameserver> -f <surl>")
+        sys.exit(2)
+
+    for opt, arg in opts:
+        if opt == "-n":
+            nameserver = arg
+        elif opt == "-f":
+            surl = arg    
+
+    #parsing fileserver and file(with path)
+    surl_splitted = surl[6:].split("/", 1)
+
+    #invalid surl
+    if len(surl_splitted) != 2:
+        sys.stderr.write("ERR: invalid surl\n") 
+        sys.exit(2)
+
+    global fileserver
+    fileserver = surl_splitted[0]
+    path = surl_splitted[1]
+
+    #invalid surl
+    if path[-1] == "/":
+        sys.stderr.write("ERR: invalid surl\n") 
+        sys.exit(2)
+
+    #parsing nameserver IP from input 
+    nameserverhost = nameserver.split(":")[0]       #server's hostname or IP address
+    nameserverport = int(nameserver.split(":")[1])  #port used by the server
+
+    #using SOCK_DGRAM to get fileserver IP
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    #s.settimeout(1.0)
+    #if connection is refused
+    try:
+        s.connect((nameserverhost,nameserverport))
+        s.sendall(str.encode('WHEREIS '+fileserver+'\r\n')) 
+        data = s.recv(2048)
+    except Exception:
+        sys.stderr.write("ERR: connection error\n") 
+        sys.exit(2)
+
+    message = data.decode()   
+
+    #invalid fileserver
+    if message[:2] != "OK":
+        sys.stderr.write("ERR: fileserver not found\n") 
+        sys.exit(2)
+
+    #parsing fileserver IP from answear from server
+    global fileserverhost
+    global fileserverport    
+    fileserverhost = message[3:].split(":")[0]
+    fileserverport = int(message[3:].split(":")[1])
+    
+    #getall is assigned
+    if path == "*":
+        getall()
+    else:
+        reader(path)
+
+    s.close()
+    sys.exit(0)
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
